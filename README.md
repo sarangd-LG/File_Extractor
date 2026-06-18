@@ -1,41 +1,38 @@
-# Archive File Extractor Service
+# Setup and build for the app:
 
-This is a small Flask app that accepts an archive upload, searches for matching files, including files inside nested archives, and stores the results.
+## make the env setup
 
-## What it supports
+create a file named .flaskenv and configure the environment variables
 
-- `POST /extractions`
-- `GET /extractions/<job_id>`
-- `GET /extractions/<job_id>/results`
-- `GET /health`
+* FLASK_APP = app
+* FLASK_DEBUG =1
+* DB_USER = file_extractor
+* DB_PASSWORD = password
+* DB_HOST = db
+* DB_NAME = file_extractor_db
+* POSTGRES_USER = file_extractor
+* POSTGRES_PASSWORD = password
+* POSTGRES_DB = file_extractor_db
+* POSTGRES_HOST = db
+* DATABASE_URL = postgresql://file_extractor:password@db/file_extractor_db
+* WEB_CONCURRENCY = 2
+* SCAN_WORKERS = 4
+* GUNICORN_TIMEOUT = 120
 
-## Run locally
+## to build 
 
-```bash
-pip install -r requirements.txt
-python app.py
+run - docker-compose up --build
 
-## To run with Docker 
+## to shutdown 
 
-docker build -t file-extractor .
-docker run --rm -p 5000:5000 file-extractor
+run - docker-compose down
 
-## Test locally with command below
+## connect to database - 
 
-# Create extraction job
+docker-compose exec db psql -U file_extractor -d file_extractor_db
 
-curl -X POST http://127.0.0.1:5000/extractions ^
-  -F "archive=@sample.zip" ^
-  -F "pattern=*.json"
+## connect app to shell -
 
-# Get job status
-curl http://127.0.0.1:5000/extractions/<job_id>
+docker-compose exec web sh
 
-# Get Results 
-
-curl http://127.0.0.1:5000/extractions/<job_id>/results
-
-# Health check 
-
-curl http://127.0.0.1:5000/health
 

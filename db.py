@@ -8,4 +8,3 @@
 from flask_sqlalchemy import SQLAlchemy
 
 db = SQLAlchemy()
-DATABASE_URL = "sqlite:///local.db"

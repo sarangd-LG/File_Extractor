@@ -1,3 +1,10 @@
-Flask
-Flask-SQLAlchemy
-SQLAlchemy
+flask
+flask-sqlalchemy
+sqlalchemy
+python-dotenv
+psycopg2-binary
+gunicorn
+pytest
+pytest-flask
+pytest-mock
+requests

@@ -1,316 +1,261 @@
-import fnmatch
 import os
-import shutil
 import tarfile
-import tempfile
-import threading
 import zipfile
+import uuid
+import fnmatch
+import re
+from pathlib import Path
 from datetime import datetime
 
-from flask import Flask, request
+from flask import Flask, request, jsonify
 
-from db import db, DATABASE_URL
-from models import ExtractionJob, ExtractedFile
-
+from db import db
+from models.extracted_file import ExtractedFile
+from models.extraction_job import ExtractionJob
+import re
+MAX_NESTING_DEPTH = 100  # Define a maximum nesting depth to prevent infinite recursion
+# ARCHIVE_EXTENSIONS = (".zip", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz")
 
 app = Flask(__name__)
-app.config["SQLALCHEMY_DATABASE_URI"] = DATABASE_URL
+if os.getenv("DATABASE_URL"):
+    app.config["SQLALCHEMY_DATABASE_URI"] = os.getenv("DATABASE_URL")
+else:
+    app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///extraction_jobs.db"
 app.config["SQLALCHEMY_TRACK_MODIFICATIONS"] = False
-
 db.init_app(app)
-
-MAX_NESTED_DEPTH = 5
-
-
-def is_archive_file(file_name):
-    lower_name = file_name.lower()
-    return (
-        lower_name.endswith(".zip")
-        or lower_name.endswith(".tar")
-        or lower_name.endswith(".tar.gz")
-        or lower_name.endswith(".tgz")
-    )
-
-
-def file_matches_pattern(file_path, pattern):
-    clean_path = file_path.replace("\\", "/")
-    file_name = clean_path.split("/")[-1]
-
-    return fnmatch.fnmatch(clean_path, pattern) or fnmatch.fnmatch(file_name, pattern)
-
-
-def save_temp_file(source_file, temp_dir):
-    with tempfile.NamedTemporaryFile(delete=False, dir=temp_dir) as temp_file:
-        shutil.copyfileobj(source_file, temp_file)
-        return temp_file.name
-
-
-def save_match(job_id, full_path, file_size, nesting_depth, source_archive_name):
-    result = ExtractedFile(
-        job_id=job_id,
-        full_path=full_path.replace("\\", "/"),
-        file_name=full_path.replace("\\", "/").split("/")[-1],
-        file_size=file_size,
-        nesting_depth=nesting_depth,
-        source_archive_name=source_archive_name,
-    )
-    db.session.add(result)
-
-
-def scan_zip_file(file_path, pattern, job_id, chain_path, depth, root_archive_name, temp_dir):
-    match_count = 0
-
-    with zipfile.ZipFile(file_path, "r") as archive:
-        for item in archive.infolist():
-            if item.is_dir():
-                continue
-
-            item_name = item.filename.replace("\\", "/").strip("/")
-            current_path = f"{chain_path}/{item_name}"
-
-            if file_matches_pattern(current_path, pattern):
-                save_match(
-                    job_id=job_id,
-                    full_path=current_path,
-                    file_size=item.file_size,
-                    nesting_depth=depth,
-                    source_archive_name=root_archive_name,
-                )
-                match_count += 1
-
-            if is_archive_file(item_name):
-                if depth + 1 > MAX_NESTED_DEPTH:
-                    raise ValueError("Archive nesting is too deep")
-
-                with archive.open(item) as source_file:
-                    nested_temp_path = save_temp_file(source_file, temp_dir)
-
-                try:
-                    match_count += scan_archive(
-                        nested_temp_path,
-                        pattern,
-                        job_id,
-                        current_path,
-                        depth + 1,
-                        root_archive_name,
-                        temp_dir,
-                    )
-                finally:
-                    if os.path.exists(nested_temp_path):
-                        os.remove(nested_temp_path)
-
-    return match_count
-
-
-def scan_tar_file(file_path, pattern, job_id, chain_path, depth, root_archive_name, temp_dir):
-    match_count = 0
-
-    with tarfile.open(file_path, "r:*") as archive:
-        for member in archive.getmembers():
-            if not member.isfile():
-                continue
-
-            item_name = member.name.replace("\\", "/").strip("/")
-            current_path = f"{chain_path}/{item_name}"
-
-            if file_matches_pattern(current_path, pattern):
-                save_match(
-                    job_id=job_id,
-                    full_path=current_path,
-                    file_size=member.size,
-                    nesting_depth=depth,
-                    source_archive_name=root_archive_name,
-                )
-                match_count += 1
-
-            if is_archive_file(item_name):
-                if depth + 1 > MAX_NESTED_DEPTH:
-                    raise ValueError("Archive nesting is too deep")
-
-                source_file = archive.extractfile(member)
-                if source_file is None:
-                    continue
-
-                with source_file:
-                    nested_temp_path = save_temp_file(source_file, temp_dir)
-
-                try:
-                    match_count += scan_archive(
-                        nested_temp_path,
-                        pattern,
-                        job_id,
-                        current_path,
-                        depth + 1,
-                        root_archive_name,
-                        temp_dir,
-                    )
-                finally:
-                    if os.path.exists(nested_temp_path):
-                        os.remove(nested_temp_path)
-
-    return match_count
-
-
-def scan_archive(file_path, pattern, job_id, chain_path, depth, root_archive_name, temp_dir):
-    if zipfile.is_zipfile(file_path):
-        return scan_zip_file(
-            file_path,
-            pattern,
-            job_id,
-            chain_path,
-            depth,
-            root_archive_name,
-            temp_dir,
-        )
-
-    if tarfile.is_tarfile(file_path):
-        return scan_tar_file(
-            file_path,
-            pattern,
-            job_id,
-            chain_path,
-            depth,
-            root_archive_name,
-            temp_dir,
-        )
-
-    raise ValueError("Unsupported archive format")
-
-
-def run_extraction_job(job_id, archive_path, archive_name, pattern, temp_dir):
-    with app.app_context():
-        job = db.session.get(ExtractionJob, job_id)
-        if job is None:
-            return
-
-        try:
-            job.status = "running"
-            db.session.commit()
-
-            total_matches = scan_archive(
-                file_path=archive_path,
-                pattern=pattern,
-                job_id=job_id,
-                chain_path=archive_name,
-                depth=0,
-                root_archive_name=archive_name,
-                temp_dir=temp_dir,
-            )
-
-            job.total_matches = total_matches
-            job.status = "completed"
-            job.completed_at = datetime.utcnow()
-            db.session.commit()
-
-        except Exception as error:
-            db.session.rollback()
-
-            job = db.session.get(ExtractionJob, job_id)
-            if job is not None:
-                job.status = "failed"
-                job.error = str(error)
-                job.completed_at = datetime.utcnow()
-                db.session.commit()
-
-        finally:
-            if os.path.exists(temp_dir):
-                shutil.rmtree(temp_dir)
-
-# POST /extractions Submit a new extraction job. 
-# •	Accepts the archive as multipart/form-data upload or a URL/path reference — your choice, justify in the README 
-# •	Body parameters: pattern (glob, required) 
-# •	Response: 202 Accepted with a job_id 
-
-
-@app.route("/extractions", methods=["POST"])
-def create_extraction():
-    uploaded_file = request.files.get("archive")
-    pattern = request.form.get("pattern", "").strip()
-
-    if uploaded_file is None or uploaded_file.filename == "":
-        return {"error": "archive file is required"}, 400
-
-    if pattern == "":
-        return {"error": "pattern is required"}, 400
-
-    temp_dir = tempfile.mkdtemp(prefix="extract_")
-    archive_name = os.path.basename(uploaded_file.filename)
-
-    if archive_name == "":
-        archive_name = "uploaded_archive.zip"
-
-    archive_path = os.path.join(temp_dir, archive_name)
-    uploaded_file.save(archive_path)
-
-    job = ExtractionJob(
-        status="pending"
-    )
-    db.session.add(job)
-    db.session.commit()
-
-    worker = threading.Thread(
-        target=run_extraction_job,
-        args=(job.id, archive_path, archive_name, pattern, temp_dir),
-        daemon=True,
-    )
-    worker.start()
-
-    return {
-        "job_id": job.id,
-        "status": job.status,
-        "message": "job started",
-    }, 202
-
-# GET /extractions/{job_id} Get job status (pending / running / completed / failed) and summary (number of matches, error if any). 
-
-
-@app.route("/extractions/<job_id>", methods=["GET"])
-def get_extraction(job_id):
-    job = db.session.get(ExtractionJob, job_id)
-
-    if job is None:
-        return {"error": "job not found"}, 404
-
-    return job.to_dict(), 200
-
-# GET /extractions/{job_id}/results List matched files for a job, with pagination.  
-
-@app.route("/extractions/<job_id>/results", methods=["GET"])
-def get_results(job_id):
-    job = db.session.get(ExtractionJob, job_id)
-
-    if job is None:
-        return {"error": "job not found"}, 404
-
-    page = request.args.get("page", 1, type=int)
-    per_page = request.args.get("per_page", 10, type=int)
-
-    if page < 1 or per_page < 1:
-        return {"error": "page and per_page must be positive"}, 400
-
-    query = ExtractedFile.query.filter_by(job_id=job_id).order_by(ExtractedFile.id)
-    total = query.count()
-    items = query.offset((page - 1) * per_page).limit(per_page).all()
-
-    return {
-        "job_id": job_id,
-        "status": job.status,
-        "page": page,
-        "per_page": per_page,
-        "total": total,
-        "results": [item.to_dict() for item in items],
-    }, 200
-
-# GET /health Liveness/readiness endpoint. 
-
-@app.route("/health", methods=["GET"])
-def health():
-    return {"status": "ok"}, 200
-
 
 with app.app_context():
     db.create_all()
-
-
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.getenv("PORT", "5000")), debug=True)
+    app.run(host="0.0.0.0", port=9797, debug=True)
+
+def Identify_archive_type(file_path):
+    if zipfile.is_zipfile(file_path):
+        return "zip"
+    elif tarfile.is_tarfile(file_path):
+        return "tar"
+    else:
+        return None
+
+def extract_archive(file_path, request_id, pattern, max_nesting, nesting_depth, logical_root=""):
+    if nesting_depth > max_nesting:
+        return jsonify({"message": "Maximum nesting depth reached"}), 200
+    try:
+        if Identify_archive_type(file_path) == "zip":
+            with zipfile.ZipFile(file_path, 'r') as zip_ref:
+                for file in zip_ref.namelist():
+
+                    normalized_file = file.replace("\\", "/")
+                    logical_member_path = f"{logical_root}/{normalized_file}" if logical_root else normalized_file
+
+                    zip_ref.extract(file, os.path.dirname(file_path))
+                    complete_file_path = os.path.join(os.path.dirname(file_path), file)
+                    if Identify_archive_type(complete_file_path):
+                        print(f"nested archive file: {complete_file_path}")
+                        nested_result = extract_archive(complete_file_path, request_id, pattern, max_nesting, nesting_depth + 1, logical_member_path)
+                        if nested_result is not None:
+                            return nested_result
+                    else:
+                        match_path = Path(logical_member_path)
+                        if match_path.match(pattern):
+                            print(f"matched file: {logical_member_path}")
+                            extracted_file_record = ExtractedFile(
+                                job_id = request_id,
+                                full_path = logical_member_path,
+                                file_name = os.path.basename(file),
+                                file_size = zip_ref.getinfo(file).file_size,
+                                nesting_depth = nesting_depth,
+                                source_archive_name = os.path.basename(file_path)
+                            )
+                            # update the count of total matches in ExtractionJob
+                            db.session.add(extracted_file_record)
+                            extraction_job = ExtractionJob.query.get(request_id)
+                            extraction_job.total_matches += 1
+                            extraction_job.status = "running"
+                            db.session.add(extraction_job)
+                            db.session.commit()
+        elif Identify_archive_type(file_path) == "tar":
+                with tarfile.open(file_path, 'r') as tar_ref:
+                    for member in tar_ref.getmembers():
+                        normalized_member_name = member.name.replace("\\", "/")
+                        logical_member_path = f"{logical_root}/{normalized_member_name}" if logical_root else normalized_member_name
+                        tar_ref.extract(member, os.path.dirname(file_path))
+                        complete_file_path = os.path.join(os.path.dirname(file_path), member.name)
+                        if Identify_archive_type(complete_file_path):
+                            print(f"nested archive file: {complete_file_path}")
+                            nested_result = extract_archive(complete_file_path, request_id, pattern, max_nesting, nesting_depth + 1, logical_member_path)
+                            if nested_result is not None:
+                                return nested_result
+                        else:
+                            match_path = Path(logical_member_path)
+                            if match_path.match(pattern):
+                                print(f"matched file: {logical_member_path}")
+                                extracted_file_record = ExtractedFile(
+                                    job_id = request_id,
+                                    full_path = logical_member_path,
+                                    file_name = os.path.basename(member.name),
+                                    file_size = member.size,
+                                    nesting_depth = nesting_depth,
+                                    source_archive_name = os.path.basename(file_path)
+                                )
+
+                                db.session.add(extracted_file_record)
+                                extraction_job = ExtractionJob.query.get(request_id)
+                                extraction_job.total_matches += 1
+                                extraction_job.status = "running"
+                                db.session.add(extraction_job)
+                                db.session.commit()
+        else:
+            extraction_job = ExtractionJob.query.get(request_id)
+            extraction_job.status = "failed"
+            db.session.add(extraction_job)
+            db.session.commit()
+            return jsonify({"error": "Unsupported archive format"}), 400
+    except zipfile.BadZipFile:
+        print(f"Error: {file_path} is not a valid zip file.")
+        extraction_job = ExtractionJob.query.get(request_id)
+        extraction_job.status = "failed"
+        db.session.add(extraction_job)
+        db.session.commit()
+        return jsonify({"error": f"{file_path} is not a valid zip file."}), 400
+    except Exception as e:
+        print(f"An error occurred while extracting {file_path}: {e}")
+        extraction_job = ExtractionJob.query.get(request_id)
+        extraction_job.status = "failed"
+        db.session.add(extraction_job)
+        db.session.commit()
+        return jsonify({"error": "Extraction failed"}), 500
+    
+    # set status to completed if no errors occurred
+    extraction_job = ExtractionJob.query.get(request_id)
+    if extraction_job.status != "failed":
+        extraction_job.status = "completed"
+        extraction_job.completed_at = datetime.utcnow()
+        db.session.add(extraction_job)
+        db.session.commit()
+    return None
+
+
+""" 
+Accepts the archive as multipart/form-data upload or a URL/path reference — 
+your choice, justify in the README 
+● Body parameters: pattern (glob, required) 
+● Response: 202 Accepted with a job_id 
+"""
+@app.post("/extractions")
+def create_extraction_job():
+
+    #  get the file and pattern from the request
+    file = request.files.get('archive')
+    if not file:
+        return jsonify({"error": "No file uploaded"}), 400
+    pattern = request.form.get('pattern')
+    if not pattern:
+        return jsonify({"error": "Pattern is required"}), 400
+
+
+    # calculate nesting depth based on pattern
+    if "**" in pattern:
+        max_nesting = MAX_NESTING_DEPTH  # Set to a predefined maximum depth
+    else:
+        pattern_parts = Path(pattern).parts
+        max_nesting = max(0,len(pattern_parts) - 1) # Calculate depth based on pattern parts
+    
+
+    #  save the uploaded file to a temporary location
+    filename = file.filename
+    request_id = str(uuid.uuid4())
+    request_temp_dir = os.path.join("temp", request_id)
+    os.makedirs(request_temp_dir, exist_ok=True)
+    file_path = os.path.join(request_temp_dir, filename)
+    file.save(file_path)
+
+    # create entry in ExtractionJob
+    extraction_job = ExtractionJob(
+        id = request_id,
+        status = "pending",
+        total_matches = 0,
+        submitted_at = datetime.utcnow(),
+        completed_at = None
+    )
+    db.session.add(extraction_job)
+    db.session.commit()
+
+    archive_type = Identify_archive_type(file_path)
+    if not archive_type:
+        return jsonify({"error": "Unsupported archive format"}), 400
+    else:
+        nesting_depth = 0
+        extraction_result = extract_archive(file_path, request_id, pattern, max_nesting, nesting_depth)
+        if extraction_result is not None:
+            return extraction_result
+    return jsonify(
+        {
+            "job_id": request_id,
+            "message": {
+                "status": ExtractionJob.query.get(request_id).status,
+                "pattern": pattern,
+                "nesting_depth": nesting_depth,
+                "archive_type": archive_type,
+                "total_matches": ExtractionJob.query.get(request_id).total_matches,
+                "completed_at": ExtractionJob.query.get(request_id).completed_at.isoformat() if ExtractionJob.query.get(request_id).completed_at else None
+            }
+        }
+    ), 202
+
+@app.get("/extractions/<job_id>")
+def get_extraction_job(job_id):
+    try:
+        extraction_job = ExtractionJob.query.get(job_id)
+        if not extraction_job:
+            return jsonify({"error": "Job not found"}), 404
+
+        extracted_files = ExtractedFile.query.filter_by(job_id=job_id).all()
+        extracted_files_list = [file.to_dict() for file in extracted_files]
+    except Exception as e:
+        return jsonify({"error": "Failed to retrieve job"}), 500
+
+    return jsonify(
+        {
+            "job_id": extraction_job.id,
+            "status": extraction_job.status,
+            "total_matches": extraction_job.total_matches,
+            "submitted_at": extraction_job.submitted_at.isoformat() if extraction_job.submitted_at else None,
+            "completed_at": extraction_job.completed_at.isoformat() if extraction_job.completed_at else None,
+            "extracted_files": extracted_files_list
+        }
+    ), 200
+
+@app.get("/extractions/<job_id>/results")
+def get_extraction_results(job_id):
+    #  list the matched files with pagination
+    try:
+        extraction_job = ExtractionJob.query.get(job_id)
+        if not extraction_job:
+            return jsonify({"error": "Job not found"}), 404
+
+        page = request.args.get('page', 1, type=int)
+        per_page = request.args.get('per_page', 10, type=int)
+
+        extracted_files_query = ExtractedFile.query.filter_by(job_id=job_id)
+        extracted_files_paginated = extracted_files_query.paginate(page=page, per_page=per_page, error_out=False)
+        extracted_files_list = [file.to_dict() for file in extracted_files_paginated.items]
+    except Exception as e:
+        return jsonify({"error": "Failed to retrieve results"}), 500
+    return jsonify(
+        {
+            "extracted_files": extracted_files_list,
+            "pagination": {
+                "page": page,
+                "per_page": per_page,
+                "total_pages": extracted_files_paginated.pages,
+                "total_items": extracted_files_paginated.total
+            }
+        }
+    ), 200
+
+
+@app.get("/health")
+def health_check():
+    return jsonify({"status": "ok"}), 200
+
