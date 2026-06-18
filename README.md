@@ -56,3 +56,34 @@ now to check matched files create a new request at - "http://127.0.0.1:9797/extr
 
 * create a new request at - "http://127.0.0.1:9797/extractions/<job_id>/results"
 * ![alt text](images/image3.png)
+
+## architecture / flow
+
+### Components
+
+* Flask API in `app.py` accepts archive uploads and exposes job status and result endpoints.
+* `ThreadPoolExecutor` runs archive extraction in the background so the upload request can return immediately.
+* `ExtractionJob` stores the job lifecycle such as `pending`, `running`, `completed`, or `failed`.
+* `ExtractedFile` stores each matched file entry, including the full logical path inside nested archives.
+* The `temp/<job_id>/` folder stores the uploaded archive and extracted nested archives while the job is running.
+
+### Request flow
+
+```mermaid
+flowchart TD
+	A[Client POST /extractions] --> B[Flask saves uploaded archive in temp/job_id]
+	B --> C[Create ExtractionJob with pending status]
+	C --> D[Submit background task to ThreadPoolExecutor]
+	D --> E[Return 202 with job_id]
+	D --> F[Background worker marks job running]
+	F --> G[Recursive archive extraction zip or tar]
+	G --> H[Pattern match against extracted file paths]
+	H --> I[Save matched rows in ExtractedFile]
+	I --> J[Update total_matches and job status]
+	J --> K[Client GET /extractions/job_id or /results]
+```
+
+### Path behavior
+
+* Matched files are stored with the full logical archive chain.
+* Example: `outer.zip/inner.tar.gz/data/file.json`
