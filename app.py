@@ -159,12 +159,6 @@ def run_extraction_job(file_path, request_id, pattern, max_nesting, nesting_dept
             db.session.remove()
 
 
-""" 
-Accepts the archive as multipart/form-data upload or a URL/path reference — 
-your choice, justify in the README 
-● Body parameters: pattern (glob, required) 
-● Response: 202 Accepted with a job_id 
-"""
 @app.post("/extractions")
 def create_extraction_job():
 
@@ -215,12 +209,12 @@ def create_extraction_job():
         {
             "job_id": request_id,
             "message": {
-                "status": ExtractionJob.query.get(request_id).status,
+                "status": ExtractionJob.query.get(request_id).status if ExtractionJob.query.get(request_id) else "pending",
                 "pattern": pattern,
                 "nesting_depth": nesting_depth,
                 "archive_type": archive_type,
-                "total_matches": ExtractionJob.query.get(request_id).total_matches,
-                "completed_at": ExtractionJob.query.get(request_id).completed_at.isoformat() if ExtractionJob.query.get(request_id).completed_at else None
+                "total_matches": ExtractionJob.query.get(request_id).total_matches if ExtractionJob.query.get(request_id) else 0,
+                "completed_at": ExtractionJob.query.get(request_id).completed_at.isoformat() if ExtractionJob.query.get(request_id) and ExtractionJob.query.get(request_id).completed_at else None
             }
         }
     ), 202
