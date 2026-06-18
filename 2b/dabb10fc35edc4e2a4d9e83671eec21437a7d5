@@ -1,0 +1,19 @@
+README.md
+  s_1c5757f22d2d99::t_108e51591f1aef 64-68,72-84
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "2bdabb10fc35edc4e2a4d9e83671eec21437a7d5",
+  "prompts": {},
+  "sessions": {
+    "s_1c5757f22d2d99": {
+      "agent_id": {
+        "tool": "github-copilot",
+        "id": "229f0d71-9c6a-4174-b6b3-d3d3f4047969",
+        "model": "gpt-5.3-codex"
+      },
+      "human_author": "Sarang D/LGSI Cyber Security Unit <sarang.d@lge.com>"
+    }
+  }
+}
