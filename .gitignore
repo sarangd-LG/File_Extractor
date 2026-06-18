@@ -26,6 +26,7 @@ data.db
 *.sqlite
 *.sqlite3
 temp/**
+tests/temp/**
 
 # OS and editor files
 .DS_Store

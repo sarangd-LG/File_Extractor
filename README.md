@@ -35,4 +35,24 @@ docker-compose exec db psql -U file_extractor -d file_extractor_db
 
 docker-compose exec web sh
 
+## run testcase
+* cd tests
+* pytest -s -v .\test_app.py
 
+## Test API using postman
+
+* create a new post request at - "http://127.0.0.1:9797/extractions"
+* fill the form data with file path (key = "archive", value = "filepath")
+* send the data and check body for output, you should get the job_id
+* ![alt text](images/image.png)
+
+now the archive has been pushed, now to check the status create a new request
+
+* create a get request at - "http://127.0.0.1:9797/extractions/<job_id>
+* check the output in body for status and other data
+![alt text](images/image2.png)
+
+now to check matched files create a new request at - "http://127.0.0.1:9797/extractions/<job_id>/results"
+
+* create a new request at - "http://127.0.0.1:9797/extractions/<job_id>/results"
+* ![alt text](images/image3.png)

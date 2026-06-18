@@ -163,7 +163,7 @@ def run_extraction_job(file_path, request_id, pattern, max_nesting, nesting_dept
 def create_extraction_job():
 
     #  get the file and pattern from the request
-    file = request.files.get('archive')
+    file = request.files.get('archive') or request.files.get('file')
     if not file:
         return jsonify({"error": "No file uploaded"}), 400
     pattern = request.form.get('pattern')
@@ -211,7 +211,6 @@ def create_extraction_job():
             "message": {
                 "status": ExtractionJob.query.get(request_id).status if ExtractionJob.query.get(request_id) else "pending",
                 "pattern": pattern,
-                "nesting_depth": nesting_depth,
                 "archive_type": archive_type,
                 "total_matches": ExtractionJob.query.get(request_id).total_matches if ExtractionJob.query.get(request_id) else 0,
                 "completed_at": ExtractionJob.query.get(request_id).completed_at.isoformat() if ExtractionJob.query.get(request_id) and ExtractionJob.query.get(request_id).completed_at else None
