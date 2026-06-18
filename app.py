@@ -4,6 +4,7 @@ import zipfile
 import uuid
 import fnmatch
 import re
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from datetime import datetime
 
@@ -15,6 +16,7 @@ from models.extraction_job import ExtractionJob
 import re
 MAX_NESTING_DEPTH = 100  # Define a maximum nesting depth to prevent infinite recursion
 # ARCHIVE_EXTENSIONS = (".zip", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2", ".tar.xz", ".txz")
+EXECUTOR = ThreadPoolExecutor(max_workers=int(os.getenv("EXTRACTION_WORKERS", "4")))
 
 app = Flask(__name__)
 if os.getenv("DATABASE_URL"):
@@ -71,7 +73,7 @@ def extract_archive(file_path, request_id, pattern, max_nesting, nesting_depth, 
                             db.session.add(extracted_file_record)
                             extraction_job = ExtractionJob.query.get(request_id)
                             extraction_job.total_matches += 1
-                            extraction_job.status = "running"
+                            # extraction_job.status = "running"
                             db.session.add(extraction_job)
                             db.session.commit()
         elif Identify_archive_type(file_path) == "tar":
@@ -102,7 +104,7 @@ def extract_archive(file_path, request_id, pattern, max_nesting, nesting_depth, 
                                 db.session.add(extracted_file_record)
                                 extraction_job = ExtractionJob.query.get(request_id)
                                 extraction_job.total_matches += 1
-                                extraction_job.status = "running"
+                                # extraction_job.status = "running"
                                 db.session.add(extraction_job)
                                 db.session.commit()
         else:
@@ -134,6 +136,27 @@ def extract_archive(file_path, request_id, pattern, max_nesting, nesting_depth, 
         db.session.add(extraction_job)
         db.session.commit()
     return None
+
+
+def run_extraction_job(file_path, request_id, pattern, max_nesting, nesting_depth, logical_root):
+    with app.app_context():
+        extraction_job = ExtractionJob.query.get(request_id)
+        if extraction_job:
+            extraction_job.status = "running"
+            db.session.add(extraction_job)
+            db.session.commit()
+
+        try:
+            extract_archive(file_path, request_id, pattern, max_nesting, nesting_depth, logical_root)
+        except Exception as e:
+            print(f"Background extraction failed for {file_path}: {e}")
+            extraction_job = ExtractionJob.query.get(request_id)
+            if extraction_job:
+                extraction_job.status = "failed"
+                db.session.add(extraction_job)
+                db.session.commit()
+        finally:
+            db.session.remove()
 
 
 """ 
@@ -186,9 +209,8 @@ def create_extraction_job():
         return jsonify({"error": "Unsupported archive format"}), 400
     else:
         nesting_depth = 0
-        extraction_result = extract_archive(file_path, request_id, pattern, max_nesting, nesting_depth)
-        if extraction_result is not None:
-            return extraction_result
+        logical_root = os.path.basename(filename).replace("\\", "/")
+        EXECUTOR.submit(run_extraction_job, file_path, request_id, pattern, max_nesting, nesting_depth, logical_root)
     return jsonify(
         {
             "job_id": request_id,
