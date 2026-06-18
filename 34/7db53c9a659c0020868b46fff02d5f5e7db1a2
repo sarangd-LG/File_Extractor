@@ -1,0 +1,34 @@
+app.py
+  s_cd81f985eb91e1::t_cdf6a940a26a1d 61,64,92,95
+  s_cd81f985eb91e1::t_3edc45c4e9c1c2 7,48-49,80-81
+  s_cd81f985eb91e1::t_eb9b6ec8510656 17,40-41,55,86,159-179,181,184-189
+  s_5b9be4cee3d341::t_2fbd216159fd8c 46,56-58,62-63,65-67,69-76,87-89,93-94,96-98,102-106
+  s_5b9be4cee3d341::t_9c39b67940d8f9 120-136,190-191
+  s_5b9be4cee3d341::t_bbc7326636fe06 35-37,54,68,78,85,99
+  s_cd81f985eb91e1::t_12ece8946ae01b 59,90
+  s_cd81f985eb91e1::t_75f56aefd64324 51-53,82-84
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.8",
+  "base_commit_sha": "347db53c9a659c0020868b46fff02d5f5e7db1a2",
+  "prompts": {},
+  "sessions": {
+    "s_5b9be4cee3d341": {
+      "agent_id": {
+        "tool": "github-copilot",
+        "id": "03814c65-395b-47d8-91fc-d660e78ee5ea",
+        "model": "gpt-5.3-codex"
+      },
+      "human_author": "Sarang D/LGSI Cyber Security Unit <sarang.d@lge.com>"
+    },
+    "s_cd81f985eb91e1": {
+      "agent_id": {
+        "tool": "github-copilot",
+        "id": "f1d9c5b6-caa4-4b3f-8a70-abd33e945977",
+        "model": "gpt-5.3-codex"
+      },
+      "human_author": "Sarang D/LGSI Cyber Security Unit <sarang.d@lge.com>"
+    }
+  }
+}
